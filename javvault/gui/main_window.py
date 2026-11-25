@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 from javvault.core import (
     CompressionJob, VaultStore, checkout, find_binary, restore,
 )
+from javvault.core.paths import data_file
 
 STATUS_TEXT = {"OUT": "在外(OUT)", "IN": "已归还(IN)", "ARCHIVED": "已归档"}
 STATUS_COLOR = {"OUT": QColor("#e65100"), "IN": QColor("#2e7d32"),
@@ -41,10 +42,14 @@ class CompressWorker(QThread):
             if self.cancel_requested:
                 break
             self.progress.emit(i, 0, "压缩中…")
-            ok, msg = job.run(
-                self.ffmpeg, self.ffprobe,
-                lambda pct, info, i=i: self.progress.emit(i, pct, info),
-                lambda line: self.log_line.emit(line))
+            try:
+                ok, msg = job.run(
+                    self.ffmpeg, self.ffprobe,
+                    lambda pct, info, i=i: self.progress.emit(i, pct, info),
+                    lambda line: self.log_line.emit(line))
+            except Exception as e:  # 线程级兑底：绝不让任务静默死掉
+                import traceback
+                ok, msg = False, f"内部异常: {e}\n{traceback.format_exc(limit=4)}"
             self.item_done.emit(i, ok, msg)
         self.all_done.emit()
 
@@ -52,7 +57,7 @@ class CompressWorker(QThread):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("JVault — 番号出库/复原 + 压缩队列")
+        self.setWindowTitle("JVault v1.0.1 — 番号出库/复原 + 压缩队列")
         self.resize(1180, 760)
         self.store = VaultStore()
         self.ffmpeg = find_binary("ffmpeg")
@@ -203,11 +208,10 @@ class MainWindow(QMainWindow):
 
     def _append_log(self, line: str):
         import time as _t
-        stamp = _t.strftime("%H:%M:%S ")
+        stamp = _t.strftime("%m-%d %H:%M:%S ")
         self.log_view.appendPlainText(stamp + line)
         try:
-            os.makedirs(os.path.expanduser("~/.javvault"), exist_ok=True)
-            with open(os.path.expanduser("~/.javvault/compress.log"), "a",
+            with open(data_file("compress.log"), "a",
                       encoding="utf-8") as f:
                 f.write(_t.strftime("%m-%d %H:%M:%S ") + line + "\n")
         except OSError:
@@ -348,6 +352,12 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "缺 ffmpeg",
                                 "PATH 中找不到 ffmpeg。\n把 ffmpeg.exe 所在目录加入 PATH，"
                                 "或把 ffmpeg.exe/ffprobe.exe 放到本程序同目录。")
+            return
+        if not self.ffprobe:
+            QMessageBox.warning(self, "缺 ffprobe",
+                                "PATH/程序目录找不到 ffprobe.exe。\n"
+                                "把它和 ffmpeg.exe 放一起（同一目录），"
+                                "否则无法显示时长/ETA 且无法校验产物。")
             return
         if not self.jobs:
             return

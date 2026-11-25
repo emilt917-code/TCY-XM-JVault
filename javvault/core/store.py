@@ -6,7 +6,9 @@ import sqlite3
 import time
 from dataclasses import dataclass
 
-DEFAULT_DB = os.path.expanduser("~/.javvault/vault.db")
+from .paths import data_file
+
+DEFAULT_DB = data_file("vault.db")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS records (

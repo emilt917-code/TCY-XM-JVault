@@ -18,24 +18,29 @@ PROFILES = {
 
 
 def find_binary(name: str) -> str | None:
-    """依次查找 PATH、程序所在目录、当前目录（Windows 下支持 ffmpeg.exe 放旁边）。"""
+    """依次查找 PATH、PyInstaller 解包目录、程序所在目录、当前目录。"""
     found = shutil.which(name)
     if found:
         return found
     import sys
     candidates = []
     if getattr(sys, "frozen", False):
+        candidates.append(getattr(sys, "_MEIPASS", ""))
         candidates.append(os.path.dirname(sys.executable))
     candidates.append(os.getcwd())
     suffix = ".exe" if os.name == "nt" else ""
     for d in candidates:
+        if not d:
+            continue
         c = os.path.join(d, name + suffix)
         if os.path.isfile(c):
             return c
     return None
 
 
-def duration_of(path: str, ffprobe: str = "ffprobe") -> float | None:
+def duration_of(path: str, ffprobe: str | None = None) -> float | None:
+    if not ffprobe:
+        return None
     try:
         out = subprocess.run(
             [ffprobe, "-v", "error", "-show_entries", "format=duration",
@@ -44,13 +49,13 @@ def duration_of(path: str, ffprobe: str = "ffprobe") -> float | None:
         data = json.loads(out.stdout or "{}")
         d = data.get("format", {}).get("duration")
         return float(d) if d else None
-    except (OSError, ValueError, json.JSONDecodeError):
+    except Exception:
         return None
 
 
 def probe_ok(path: str, ffprobe: str = "ffprobe") -> bool:
     """压缩产物可解码性校验。"""
-    if not os.path.exists(path) or os.path.getsize(path) == 0:
+    if not ffprobe or not os.path.exists(path) or os.path.getsize(path) == 0:
         return False
     try:
         r = subprocess.run(
@@ -58,7 +63,7 @@ def probe_ok(path: str, ffprobe: str = "ffprobe") -> bool:
              "-show_entries", "stream=codec_name", "-of", "csv=p=0", path],
             capture_output=True, text=True, timeout=60)
         return bool(r.stdout.strip())
-    except OSError:
+    except Exception:
         return False
 
 
@@ -104,6 +109,7 @@ class CompressionJob:
                           self.maxrate_k, self.audio_kbps, ffmpeg)
         if on_log:
             on_log(f"$ {' '.join(args)}")
+            on_log(f"[i] ffprobe: {ffprobe or '未找到（时长/ETA 不可用）'}")
             if total:
                 on_log(f"[i] 源时长 {total/3600:.2f}h")
         try:
