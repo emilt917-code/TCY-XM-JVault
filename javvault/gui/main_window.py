@@ -62,6 +62,13 @@ class MainWindow(QMainWindow):
         self.store = VaultStore()
         self.ffmpeg = find_binary("ffmpeg")
         self.ffprobe = find_binary("ffprobe")
+        if self.ffmpeg and not self.ffprobe:
+            # ffmpeg 找到了但 ffprobe 没找到：去 ffmpeg 同目录找（常见遗漏）
+            cand = os.path.join(
+                os.path.dirname(self.ffmpeg),
+                "ffprobe.exe" if os.name == "nt" else "ffprobe")
+            if os.path.isfile(cand):
+                self.ffprobe = cand
         self.jobs: list[CompressionJob] = []
         self.worker: CompressWorker | None = None
         self._build_ui()
