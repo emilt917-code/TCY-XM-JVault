@@ -1,7 +1,7 @@
-# JavVault
+# JVault
 
 番号出库/复原 + NVENC 压缩队列工具。Python + PySide6，跨平台（Windows / macOS）。
-配套软件：UltraRename（通用批量重命名）。
+配套软件：TRename（通用批量重命名）。
 
 ## 功能
 

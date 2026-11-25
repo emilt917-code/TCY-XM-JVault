@@ -14,7 +14,7 @@ if not exist .venv (
     python -m venv .venv
 )
 .venv\Scripts\python -m pip install -i https://mirrors.aliyun.com/pypi/simple/ -r requirements.txt
-.venv\Scripts\python -m PyInstaller --onefile --windowed --name JavVault run.py
+.venv\Scripts\python -m PyInstaller --onefile --windowed --name JVault run.py
 echo.
 echo Build done: dist\JavVault.exe
 echo NOTE: keep ffmpeg.exe and ffprobe.exe next to JavVault.exe (or in PATH)

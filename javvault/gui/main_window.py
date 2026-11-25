@@ -45,7 +45,7 @@ class CompressWorker(QThread):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("JavVault — 番号出库/复原 + 压缩队列")
+        self.setWindowTitle("JVault — 番号出库/复原 + 压缩队列")
         self.resize(1180, 760)
         self.store = VaultStore()
         self.ffmpeg = find_binary("ffmpeg")
