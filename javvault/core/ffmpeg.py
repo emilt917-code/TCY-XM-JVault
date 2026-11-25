@@ -78,7 +78,7 @@ def build_args(src: str, dst: str, profile: str = "h264", cq: int | None = None,
         args += ["-crf", str(cq)]
     args += ["-maxrate", f"{maxrate_k}k", "-bufsize", "40M",
              "-c:a", "aac", "-b:a", f"{audio_kbps}k",
-             "-movflags", "+faststart", dst]
+             "-movflags", "+faststart", "-stats_period", "0.2", dst]
     return args
 
 
@@ -98,33 +98,74 @@ class CompressionJob:
         self.cancelled = False
 
     def run(self, ffmpeg: str = "ffmpeg", ffprobe: str = "ffprobe",
-            progress=None) -> tuple[bool, str]:
+            progress=None, on_log=None) -> tuple[bool, str]:
         total = duration_of(self.src, ffprobe)
         args = build_args(self.src, self.dst, self.profile, self.cq,
                           self.maxrate_k, self.audio_kbps, ffmpeg)
+        if on_log:
+            on_log(f"$ {' '.join(args)}")
+            if total:
+                on_log(f"[i] 源时长 {total/3600:.2f}h")
         try:
             self.process = subprocess.Popen(
                 args, stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE, text=True, encoding="utf-8",
-                errors="replace")
+                stderr=subprocess.PIPE)
         except OSError as e:
             return False, f"启动 ffmpeg 失败: {e}"
+        except OSError as e:
+            return False, f"启动 ffmpeg 失败: {e}"
+        code = None
         time_re = re.compile(r"time=(\d+):(\d+):(\d+(?:\.\d+)?)")
+        speed_re = re.compile(r"speed=\s*([\d.]+)x")
+        frame_re = re.compile(r"frame=\s*(\d+)")
         assert self.process.stderr is not None
-        for line in self.process.stderr:
-            if self.cancelled:
-                self.process.kill()
-                return False, "已取消"
-            m = time_re.search(line)
-            if m and total and progress:
+        fd = self.process.stderr.fileno()
+        pending = b""
+        while not self.cancelled:
+            # ffmpeg 进度用 \r 分隔而非 \n，必须按块读再手动切分
+            try:
+                chunk = os.read(fd, 1024)
+            except OSError:
+                break
+            if not chunk:
+                break
+            pending += chunk
+            parts = re.split(b"[\r\n]", pending)
+            pending = parts[-1]
+            for raw_line in parts[:-1]:
+                text = raw_line.decode("utf-8", "ignore")
+                stripped = text.strip()
+                if stripped and on_log and not stripped.startswith("frame="):
+                    on_log(stripped)
+                m = time_re.search(text)
+                if not (m and progress):
+                    continue
                 sec = int(m.group(1)) * 3600 + int(m.group(2)) * 60 + \
                     float(m.group(3))
-                progress(min(99, int(sec / total * 100)))
+                sm = speed_re.search(text)
+                fm = frame_re.search(text)
+                if total:
+                    pct = min(99, int(sec / total * 100))
+                    info = f"{sec/3600:.2f}/{total/3600:.2f}h"
+                else:
+                    pct = 0
+                    info = f"已编码 {sec/60:.1f} 分钟（时长未知）"
+                if sm:
+                    info += f" | {sm.group(1)}x"
+                    if float(sm.group(1)) > 0:
+                        remain = (total - sec) / float(sm.group(1)) if total else None
+                        if remain and remain > 0:
+                            info += f" | 剩余~{int(remain//60)}m{int(remain%60):02d}s"
+                if fm:
+                    info += f" | 帧{fm.group(1)}"
+                progress(pct, info)
         code = self.process.wait()
+        if self.cancelled:
+            return False, "已取消"
         if code != 0:
             return False, f"ffmpeg 退出码 {code}"
         if not probe_ok(self.dst, ffprobe):
             return False, "产物校验失败（ffprobe 无法解码）"
         if progress:
-            progress(100)
+            progress(100, "")
         return True, "ok"

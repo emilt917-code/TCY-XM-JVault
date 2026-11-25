@@ -8,8 +8,9 @@ from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog,
     QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMainWindow,
-    QMessageBox, QProgressBar, QPushButton, QSpinBox, QStatusBar, QTabWidget,
-    QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QSpinBox,
+    QStatusBar, QTabWidget, QTableWidget, QTableWidgetItem, QVBoxLayout,
+    QWidget,
 )
 
 from javvault.core import (
@@ -22,9 +23,10 @@ STATUS_COLOR = {"OUT": QColor("#e65100"), "IN": QColor("#2e7d32"),
 
 
 class CompressWorker(QThread):
-    """后台压缩线程：逐个任务执行，发进度信号。"""
+    """后台压缩线程：逐个任务执行，发进度/日志信号。"""
     progress = Signal(int, int, str)      # 任务序号, 百分比, 消息
     item_done = Signal(int, bool, str)    # 任务序号, 成功, 消息
+    log_line = Signal(str)                # ffmpeg 原始日志行
     all_done = Signal()
 
     def __init__(self, jobs: list[CompressionJob], ffmpeg: str, ffprobe: str):
@@ -32,12 +34,17 @@ class CompressWorker(QThread):
         self.jobs = jobs
         self.ffmpeg = ffmpeg
         self.ffprobe = ffprobe
+        self.cancel_requested = False
 
     def run(self):
         for i, job in enumerate(self.jobs):
+            if self.cancel_requested:
+                break
             self.progress.emit(i, 0, "压缩中…")
-            ok, msg = job.run(self.ffmpeg, self.ffprobe,
-                              lambda pct, i=i: self.progress.emit(i, pct, ""))
+            ok, msg = job.run(
+                self.ffmpeg, self.ffprobe,
+                lambda pct, info, i=i: self.progress.emit(i, pct, info),
+                lambda line: self.log_line.emit(line))
             self.item_done.emit(i, ok, msg)
         self.all_done.emit()
 
@@ -155,10 +162,65 @@ class MainWindow(QMainWindow):
             QHeaderView.ResizeToContents)
         v.addWidget(self.queue_table, 1)
 
+        # 整体进度 + 控制
+        ov = QHBoxLayout()
+        ov.addWidget(QLabel("总进度:"))
+        self.overall_bar = QProgressBar()
+        ov.addWidget(self.overall_bar, 1)
+        self.btn_cancel = QPushButton("■ 取消队列")
+        self.btn_cancel.clicked.connect(self._cancel_queue)
+        ov.addWidget(self.btn_cancel)
+        v.addLayout(ov)
+
+        # 日志面板（小丸式实时输出）
+        grp_log = QGroupBox("实时日志（同时写入 ~/.javvault/compress.log）")
+        lv = QVBoxLayout(grp_log)
+        self.log_view = QPlainTextEdit()
+        self.log_view.setReadOnly(True)
+        self.log_view.setMaximumHeight(180)
+        from PySide6.QtGui import QFont
+        self.log_view.setFont(QFont("Courier New"))
+        self.log_view.setLineWrapMode(QPlainTextEdit.NoWrap)
+        lv.addWidget(self.log_view)
+        lb = QHBoxLayout()
+        btn_clear_log = QPushButton("清空日志")
+        btn_clear_log.clicked.connect(lambda: self.log_view.clear())
+        btn_copy_log = QPushButton("复制全部")
+        btn_copy_log.clicked.connect(self._copy_log)
+        lb.addStretch(1)
+        lb.addWidget(btn_clear_log)
+        lb.addWidget(btn_copy_log)
+        v.addLayout(lb)
+        v.addWidget(grp_log)
+
         btn_run = QPushButton("▶ 开始压缩队列")
         btn_run.clicked.connect(self._start_queue)
         v.addWidget(btn_run)
         return w
+
+    def _copy_log(self):
+        QApplication.clipboard().setText(self.log_view.toPlainText())
+
+    def _append_log(self, line: str):
+        import time as _t
+        stamp = _t.strftime("%H:%M:%S ")
+        self.log_view.appendPlainText(stamp + line)
+        try:
+            os.makedirs(os.path.expanduser("~/.javvault"), exist_ok=True)
+            with open(os.path.expanduser("~/.javvault/compress.log"), "a",
+                      encoding="utf-8") as f:
+                f.write(_t.strftime("%m-%d %H:%M:%S ") + line + "\n")
+        except OSError:
+            pass
+
+    def _cancel_queue(self):
+        if self.worker and self.worker.isRunning():
+            self.worker.cancel_requested = True
+            if self.worker.jobs and self.worker.jobs[0].process:
+                self.worker.jobs[0].cancelled = True
+            self.status.showMessage("取消请求已发送，当前任务结束后停止")
+        else:
+            self.status.showMessage("队列未在运行")
 
     # ================================================== 库管理
     def _selected_paths(self) -> list[str]:
@@ -289,16 +351,24 @@ class MainWindow(QMainWindow):
             return
         if not self.jobs:
             return
+        self._append_log(f"=== 队列启动，共 {len(self.jobs)} 个任务 | "
+                         f"编码 {self._profile()} | CQ {self.spn_cq.value()} ===")
         self.worker = CompressWorker(self.jobs, self.ffmpeg, self.ffprobe)
         self.worker.progress.connect(self._on_progress)
         self.worker.item_done.connect(self._on_item_done)
+        self.worker.log_line.connect(self._append_log)
         self.worker.all_done.connect(self._on_all_done)
-        self._refresh_queue({(i,): ("排队", 0, "") for i in range(len(self.jobs))} and
-                            {i: ("压缩中", 0, "") for i in range(len(self.jobs))})
+        self._refresh_queue({i: ("压缩中", 0, "") for i in range(len(self.jobs))})
+        self.overall_bar.setValue(0)
         self.worker.start()
 
     def _on_progress(self, idx, pct, msg):
         self._set_row(idx, "压缩中", pct, msg)
+        done = sum(1 for i in range(self.queue_table.rowCount())
+                   if (self.queue_table.item(i, 2) or
+                       QTableWidgetItem()).text().startswith("✅"))
+        total_p = int((done + pct / 100) / max(1, len(self.jobs)) * 100)
+        self.overall_bar.setValue(min(99, total_p))
 
     def _set_row(self, idx, st, pct, msg):
         if idx >= self.queue_table.rowCount():
@@ -314,8 +384,10 @@ class MainWindow(QMainWindow):
         job = self.jobs[idx]
         if not ok:
             self._set_row(idx, "❌ 失败", 0, msg)
+            self._append_log(f"[失败] {os.path.basename(job.src)}: {msg}")
             return
         self._set_row(idx, "校验通过", 100, "")
+        self._append_log(f"[完成] {os.path.basename(job.src)} -> {os.path.basename(job.dst)}")
         if self.chk_pipeline.isChecked():
             self._pipeline_after_compress(job)
         if self.chk_del_src.isChecked() and os.path.exists(job.src):
@@ -369,7 +441,11 @@ class MainWindow(QMainWindow):
         self.refresh_library()
 
     def _on_all_done(self):
-        self.status.showMessage("队列全部完成")
+        self.overall_bar.setValue(
+            100 if not (self.worker and self.worker.cancel_requested) else self.overall_bar.value())
+        self.status.showMessage("队列全部完成" if not (self.worker and self.worker.cancel_requested)
+                                else "队列已取消")
+        self._append_log("=== 队列结束 ===")
         self.refresh_library()
 
 

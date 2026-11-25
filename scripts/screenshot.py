@@ -14,7 +14,9 @@ def main():
     out = sys.argv[1] if len(sys.argv) > 1 else "/tmp/javvault.png"
     app = QApplication([])
     w = MainWindow()
-    w.resize(1180, 760)
+    w.resize(1180, 900)
+    if len(sys.argv) > 3 and sys.argv[3] == "compress":
+        w.centralWidget().setCurrentIndex(1)
     w.show()
 
     def shoot():
