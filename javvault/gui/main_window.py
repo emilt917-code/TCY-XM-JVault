@@ -405,11 +405,11 @@ class MainWindow(QMainWindow):
         from javvault.core import md5_of
         src = job.src
         name = os.path.basename(src)
-        parsed = None
         from javvault.core.codes import extract_code
         parsed = extract_code(name)
         directory = os.path.dirname(os.path.abspath(src))
         if not parsed:
+            self._append_log(f"[流水线·跳过] {name} 无番号，仅压缩不改名不记录")
             return
         display, key = parsed
         try:
@@ -423,11 +423,13 @@ class MainWindow(QMainWindow):
         if rec_id is None:
             rec_id = self.store.add_checkout(
                 key, name, name, directory, size, digest)
+        self._append_log(f"[流水线·出库] {name} -> 番号 {key}（原始名已记录）")
         # 复原：把压缩产物改名回原名（_cmp 后缀去掉）
         restored_name = recs[0].original_name if rec_id and recs else name
         if recs:
             self.store.mark_in(recs[0].id)
             rec_id = recs[0].id
+        self._append_log(f"[流水线·复原] 产物恢复原名 {restored_name}")
         # 压缩产物接替原文件身份
         new_src = os.path.join(directory, restored_name)
         if os.path.exists(new_src):
@@ -442,6 +444,7 @@ class MainWindow(QMainWindow):
             os.rename(src, src + ".bak")
             self.status.showMessage(f"原文件已改名 {src}.bak，确认没问题后手动删")
         self.store.mark_archived(rec_id, f"压缩产物: {os.path.basename(new_src)}")
+        self._append_log(f"[流水线·归档] {key} 状态 ARCHIVED；原文件备份 {src}.bak")
         self.refresh_library()
 
     def _on_all_done(self):
