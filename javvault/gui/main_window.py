@@ -61,14 +61,7 @@ class MainWindow(QMainWindow):
         self.resize(1180, 760)
         self.store = VaultStore()
         self.ffmpeg = find_binary("ffmpeg")
-        self.ffprobe = find_binary("ffprobe")
-        if self.ffmpeg and not self.ffprobe:
-            # ffmpeg 找到了但 ffprobe 没找到：去 ffmpeg 同目录找（常见遗漏）
-            cand = os.path.join(
-                os.path.dirname(self.ffmpeg),
-                "ffprobe.exe" if os.name == "nt" else "ffprobe")
-            if os.path.isfile(cand):
-                self.ffprobe = cand
+        self.ffprobe = None  # 已不依赖 ffprobe（时长/校验全走 ffmpeg）
         self.jobs: list[CompressionJob] = []
         self.worker: CompressWorker | None = None
         self._build_ui()
@@ -162,7 +155,7 @@ class MainWindow(QMainWindow):
         self.spn_audio.setValue(192)
         cv.addWidget(self.spn_audio)
         self.chk_del_src = QCheckBox("完成后删除源文件")
-        self.chk_del_src.setToolTip("仅在产物 ffprobe 校验通过后删除；不勾选则保留源文件")
+        self.chk_del_src.setToolTip("仅在产物 ffmpeg 试解码校验通过后删除；不勾选则保留源文件")
         cv.addWidget(self.chk_del_src)
         cv.addStretch(1)
         v.addWidget(grp_cfg)
@@ -357,14 +350,8 @@ class MainWindow(QMainWindow):
     def _start_queue(self):
         if not self.ffmpeg:
             QMessageBox.warning(self, "缺 ffmpeg",
-                                "PATH 中找不到 ffmpeg。\n把 ffmpeg.exe 所在目录加入 PATH，"
-                                "或把 ffmpeg.exe/ffprobe.exe 放到本程序同目录。")
-            return
-        if not self.ffprobe:
-            QMessageBox.warning(self, "缺 ffprobe",
-                                "PATH/程序目录找不到 ffprobe.exe。\n"
-                                "把它和 ffmpeg.exe 放一起（同一目录），"
-                                "否则无法显示时长/ETA 且无法校验产物。")
+                                "PATH/程序目录都找不到 ffmpeg.exe。\n"
+                                "把 ffmpeg.exe 放到本程序同目录即可（ffprobe 已不需要）。")
             return
         if not self.jobs:
             return

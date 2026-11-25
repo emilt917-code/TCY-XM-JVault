@@ -1,4 +1,4 @@
-"""ffmpeg/ffprobe 封装：探测、参数构建、带进度的压缩执行。"""
+"""ffmpeg 封装：时长探测、参数构建、带进度的压缩执行（无需 ffprobe）。"""
 from __future__ import annotations
 
 import json
@@ -38,31 +38,31 @@ def find_binary(name: str) -> str | None:
     return None
 
 
-def duration_of(path: str, ffprobe: str | None = None) -> float | None:
-    if not ffprobe:
+def duration_of(path: str, ffmpeg: str = "ffmpeg") -> float | None:
+    """用 ffmpeg 自身读时长（无需 ffprobe）：解析 stderr 的 Duration 行。"""
+    if not ffmpeg:
         return None
     try:
-        out = subprocess.run(
-            [ffprobe, "-v", "error", "-show_entries", "format=duration",
-             "-of", "json", path],
-            capture_output=True, text=True, timeout=60)
-        data = json.loads(out.stdout or "{}")
-        d = data.get("format", {}).get("duration")
-        return float(d) if d else None
+        r = subprocess.run(
+            [ffmpeg, "-hide_banner", "-i", path], capture_output=True,
+            text=True, timeout=60, errors="ignore")
+        m = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", r.stderr or "")
+        if not m:
+            return None
+        return int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3))
     except Exception:
         return None
 
 
-def probe_ok(path: str, ffprobe: str = "ffprobe") -> bool:
-    """压缩产物可解码性校验。"""
-    if not ffprobe or not os.path.exists(path) or os.path.getsize(path) == 0:
+def probe_ok(path: str, ffmpeg: str = "ffmpeg") -> bool:
+    """产物校验：存在非空 + 用 ffmpeg 试解码前 10 秒无错误（无需 ffprobe）。"""
+    if not ffmpeg or not os.path.exists(path) or os.path.getsize(path) == 0:
         return False
     try:
         r = subprocess.run(
-            [ffprobe, "-v", "error", "-select_streams", "v:0",
-             "-show_entries", "stream=codec_name", "-of", "csv=p=0", path],
-            capture_output=True, text=True, timeout=60)
-        return bool(r.stdout.strip())
+            [ffmpeg, "-v", "error", "-t", "10", "-i", path, "-f", "null", "-"],
+            capture_output=True, text=True, timeout=120, errors="ignore")
+        return r.returncode == 0 and not (r.stderr or "").strip()
     except Exception:
         return False
 
@@ -102,14 +102,13 @@ class CompressionJob:
         self.process: subprocess.Popen | None = None
         self.cancelled = False
 
-    def run(self, ffmpeg: str = "ffmpeg", ffprobe: str = "ffprobe",
+    def run(self, ffmpeg: str = "ffmpeg", ffprobe: str | None = None,
             progress=None, on_log=None) -> tuple[bool, str]:
-        total = duration_of(self.src, ffprobe)
+        total = duration_of(self.src, ffmpeg)
         args = build_args(self.src, self.dst, self.profile, self.cq,
                           self.maxrate_k, self.audio_kbps, ffmpeg)
         if on_log:
             on_log(f"$ {' '.join(args)}")
-            on_log(f"[i] ffprobe: {ffprobe or '未找到（时长/ETA 不可用）'}")
             if total:
                 on_log(f"[i] 源时长 {total/3600:.2f}h")
         try:
@@ -170,8 +169,8 @@ class CompressionJob:
             return False, "已取消"
         if code != 0:
             return False, f"ffmpeg 退出码 {code}"
-        if not probe_ok(self.dst, ffprobe):
-            return False, "产物校验失败（ffprobe 无法解码）"
+        if not probe_ok(self.dst, ffmpeg):
+            return False, "产物校验失败（ffmpeg 试解码报错）"
         if progress:
             progress(100, "")
         return True, "ok"

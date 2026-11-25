@@ -3,7 +3,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from javvault.core.ffmpeg import build_args, probe_ok  # noqa: E402
+from javvault.core.ffmpeg import build_args, duration_of, probe_ok  # noqa: E402
 
 
 def test_build_args_h264_defaults():
@@ -23,3 +23,6 @@ def test_probe_ok_missing(tmp_path):
     p = tmp_path / "empty.mp4"
     p.write_bytes(b"")
     assert not probe_ok(str(p))
+
+def test_duration_of_missing_file():
+    assert duration_of(str("/nonexist/nope.mp4")) is None
