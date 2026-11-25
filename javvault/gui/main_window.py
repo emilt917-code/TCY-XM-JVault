@@ -57,7 +57,8 @@ class CompressWorker(QThread):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("JVault v1.0.1 — 番号出库/复原 + 压缩队列")
+        from javvault import VERSION as _V
+        self.setWindowTitle(f"JVault v{_V} — 番号库 + 压缩队列")
         self.resize(1180, 760)
         self.store = VaultStore()
         self.ffmpeg = find_binary("ffmpeg")
@@ -126,11 +127,9 @@ class MainWindow(QMainWindow):
         btn_dir.clicked.connect(self._add_dir)
         btn_clear = QPushButton("清空队列")
         btn_clear.clicked.connect(self._clear_queue)
-        self.chk_pipeline = QCheckBox("全自动流水线（出库改名→压缩→复原原名→标记归档）")
-        self.chk_pipeline.setChecked(True)
         for c in (btn_add, btn_dir, btn_clear):
             sv.addWidget(c)
-        sv.addWidget(self.chk_pipeline, 1)
+        sv.addStretch(1)
         v.addWidget(grp_src)
 
         grp_cfg = QGroupBox("2. 编码参数")
@@ -154,9 +153,14 @@ class MainWindow(QMainWindow):
         self.spn_audio.setRange(64, 512)
         self.spn_audio.setValue(192)
         cv.addWidget(self.spn_audio)
-        self.chk_del_src = QCheckBox("完成后删除源文件")
-        self.chk_del_src.setToolTip("仅在产物 ffmpeg 试解码校验通过后删除；不勾选则保留源文件")
-        cv.addWidget(self.chk_del_src)
+        cv.addWidget(QLabel("源文件:"))
+        self.cmb_src_policy = QComboBox()
+        self.cmb_src_policy.addItems(["保留原文件", "完成后删除", "移入 backup 子目录"])
+        self.cmb_src_policy.setToolTip("删除/移动仅在产物试解码校验通过后执行；校验不过自动保留")
+        cv.addWidget(self.cmb_src_policy)
+        self.chk_register = QCheckBox("登记到番号库（不改名不动文件，仅记录）")
+        self.chk_register.setChecked(True)
+        cv.addWidget(self.chk_register)
         cv.addStretch(1)
         v.addWidget(grp_cfg)
 
@@ -208,7 +212,7 @@ class MainWindow(QMainWindow):
 
     def _append_log(self, line: str):
         import time as _t
-        stamp = _t.strftime("%m-%d %H:%M:%S ")
+        stamp = _t.strftime("%Y-%m-%d %H:%M:%S ")
         self.log_view.appendPlainText(stamp + line)
         try:
             with open(data_file("compress.log"), "a",
@@ -392,60 +396,57 @@ class MainWindow(QMainWindow):
             return
         self._set_row(idx, "校验通过", 100, "")
         self._append_log(f"[完成] {os.path.basename(job.src)} -> {os.path.basename(job.dst)}")
-        if self.chk_pipeline.isChecked():
-            self._pipeline_after_compress(job)
-        if self.chk_del_src.isChecked() and os.path.exists(job.src):
+        if self.chk_register.isChecked():
+            self._register_to_library(job)
+        policy = self.cmb_src_policy.currentText()
+        if not os.path.exists(job.src):
+            self._set_row(idx, "✅ 完成", 100, msg)
+            return
+        if policy == "完成后删除":
             os.remove(job.src)
-            self._set_row(idx, "✅ 完成(源已删)", 100, "已删除源文件")
+            self._append_log(f"[源文件] 已删除 {job.src}")
+            self._set_row(idx, "✅ 完成(源已删)", 100, msg)
+        elif policy == "移入 backup 子目录":
+            bdir = os.path.join(os.path.dirname(job.src), "backup")
+            os.makedirs(bdir, exist_ok=True)
+            dst = os.path.join(bdir, os.path.basename(job.src))
+            n = 2
+            while os.path.exists(dst):
+                stem, ext = os.path.splitext(dst)
+                dst = f"{stem}_{n}{ext}"; n += 1
+            os.rename(job.src, dst)
+            self._append_log(f"[源文件] 已移入 {dst}")
+            self._set_row(idx, "✅ 完成(源已备份)", 100, msg)
         else:
             self._set_row(idx, "✅ 完成", 100, msg)
 
-    def _pipeline_after_compress(self, job):
-        """全自动：出库记录 → 复原原名 → 标记归档。"""
+    def _register_to_library(self, job):
+        """登记入库：识别番号 -> 记录原始名+产物路径 -> 状态 ARCHIVED。不改名不移动。"""
+        from javvault.core.codes import extract_code
         from javvault.core import md5_of
         src = job.src
         name = os.path.basename(src)
-        from javvault.core.codes import extract_code
         parsed = extract_code(name)
         directory = os.path.dirname(os.path.abspath(src))
         if not parsed:
-            self._append_log(f"[流水线·跳过] {name} 无番号，仅压缩不改名不记录")
+            self._append_log(f"[登记·跳过] {name} 无番号")
             return
         display, key = parsed
         try:
             digest = md5_of(src)
             size = os.path.getsize(src)
-        except OSError:
+        except OSError as e:
+            self._append_log(f"[登记·失败] 读文件失败: {e}")
             return
-        # 找到已有 OUT 记录（压缩的是已出库文件）或新建记录
         recs = self.store.by_md5_out(digest)
-        rec_id = recs[0].id if len(recs) == 1 else None
-        if rec_id is None:
-            rec_id = self.store.add_checkout(
-                key, name, name, directory, size, digest)
-        self._append_log(f"[流水线·出库] {name} -> 番号 {key}（原始名已记录）")
-        # 复原：把压缩产物改名回原名（_cmp 后缀去掉）
-        restored_name = recs[0].original_name if rec_id and recs else name
         if recs:
-            self.store.mark_in(recs[0].id)
-            rec_id = recs[0].id
-        self._append_log(f"[流水线·复原] 产物恢复原名 {restored_name}")
-        # 压缩产物接替原文件身份
-        new_src = os.path.join(directory, restored_name)
-        if os.path.exists(new_src):
-            stem, ext = os.path.splitext(new_src)
-            new_src = f"{stem}_cmp{ext}"
-        try:
-            os.rename(job.dst, new_src)
-        except OSError:
+            rec = recs[0]
+            self.store.mark_archived(rec.id, f"压缩产物: {os.path.basename(job.dst)}")
+            self._append_log(f"[登记] {key} 既有记录已标记 ARCHIVED（原名 {rec.original_name}）")
             return
-        # 旧源文件让位删除或改名 .bak
-        if os.path.exists(src) and src != new_src:
-            os.rename(src, src + ".bak")
-            self.status.showMessage(f"原文件已改名 {src}.bak，确认没问题后手动删")
-        self.store.mark_archived(rec_id, f"压缩产物: {os.path.basename(new_src)}")
-        self._append_log(f"[流水线·归档] {key} 状态 ARCHIVED；原文件备份 {src}.bak")
-        self.refresh_library()
+        rec_id = self.store.add_checkout(key, name, name, directory, size, digest)
+        self.store.mark_archived(rec_id, f"压缩产物: {os.path.basename(job.dst)}")
+        self._append_log(f"[登记] {key} 已入库 ARCHIVED（原名 {name}）")
 
     def _on_all_done(self):
         self.overall_bar.setValue(

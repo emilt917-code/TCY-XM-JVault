@@ -48,3 +48,7 @@ PYTHONPATH=. .venv/bin/python run.py
 - `javvault/core/` codes（番号正则）/ store（SQLite）/ vault（出库复原）/ ffmpeg（压缩）
 - `javvault/gui/` 主窗口（库管理 + 压缩队列双标签）
 - `tests/` 单元测试
+
+## 展望（方案方向，未实施）
+
+- **元数据增强**：库管理页为每个番号挂封面图、演员、标签等元数据（SQLite 预留字段 + covers/ 图片目录），数据源考虑在线爬取（缓存+限速+失败即弃，可插件式开关）。库管理当前为初步版本，为该方向预留扩展。
