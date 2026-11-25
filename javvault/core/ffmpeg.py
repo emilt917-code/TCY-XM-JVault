@@ -9,10 +9,10 @@ import subprocess
 
 PROFILES = {
     # 兼容优先：H.264 NVENC + AAC
-    "h264": {"vcodec": "h264_nvenc", "cq": 23, "preset": "p5",
+    "h264": {"vcodec": "h264_nvenc", "cq": 28, "preset": "p5",
              "maxrate_k": 20000},
     # 体积优先：HEVC NVENC + AAC
-    "hevc": {"vcodec": "hevc_nvenc", "cq": 26, "preset": "p5",
+    "hevc": {"vcodec": "hevc_nvenc", "cq": 30, "preset": "p5",
              "maxrate_k": 12000},
 }
 

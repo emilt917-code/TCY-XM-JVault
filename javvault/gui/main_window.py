@@ -141,7 +141,8 @@ class MainWindow(QMainWindow):
         cv.addWidget(QLabel("CQ 质量:"))
         self.spn_cq = QSpinBox()
         self.spn_cq.setRange(0, 51)
-        self.spn_cq.setValue(23)
+        self.spn_cq.setValue(28)
+        self.spn_cq.setToolTip("NVENC 刻度与 x264 不同：28≈x264 CRF23 体积水平；数值越大体积越小")
         cv.addWidget(self.spn_cq)
         cv.addWidget(QLabel("码率上限(kbps):"))
         self.spn_maxrate = QSpinBox()
@@ -176,9 +177,12 @@ class MainWindow(QMainWindow):
         ov.addWidget(QLabel("总进度:"))
         self.overall_bar = QProgressBar()
         ov.addWidget(self.overall_bar, 1)
-        self.btn_cancel = QPushButton("■ 取消队列")
+        self.btn_cancel = QPushButton("⏭ 当前完成后停止")
         self.btn_cancel.clicked.connect(self._cancel_queue)
         ov.addWidget(self.btn_cancel)
+        self.btn_abort = QPushButton("⏹ 立即中断")
+        self.btn_abort.clicked.connect(self._abort_queue)
+        ov.addWidget(self.btn_abort)
         v.addLayout(ov)
 
         # 日志面板（小丸式实时输出）
@@ -224,9 +228,23 @@ class MainWindow(QMainWindow):
     def _cancel_queue(self):
         if self.worker and self.worker.isRunning():
             self.worker.cancel_requested = True
-            if self.worker.jobs and self.worker.jobs[0].process:
-                self.worker.jobs[0].cancelled = True
-            self.status.showMessage("取消请求已发送，当前任务结束后停止")
+            self.status.showMessage("当前任务完成后停止，不再开始后续任务")
+        else:
+            self.status.showMessage("队列未在运行")
+
+    def _abort_queue(self):
+        """立即中断：杀掉当前 ffmpeg，队列停止。当前任务标记已中断。"""
+        if self.worker and self.worker.isRunning():
+            self.worker.cancel_requested = True
+            for j in self.worker.jobs:
+                j.cancelled = True
+                if j.process and j.process.poll() is None:
+                    try:
+                        j.process.kill()
+                    except OSError:
+                        pass
+            self._append_log("[中断] 用户立即中断：当前 ffmpeg 已终止，队列停止")
+            self.status.showMessage("已立即中断")
         else:
             self.status.showMessage("队列未在运行")
 

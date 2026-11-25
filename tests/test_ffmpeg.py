@@ -9,7 +9,7 @@ from javvault.core.ffmpeg import build_args, duration_of, probe_ok  # noqa: E402
 def test_build_args_h264_defaults():
     a = build_args("in.mp4", "out.mp4", "h264")
     s = " ".join(a)
-    assert "-c:v h264_nvenc" in s and "-cq 23" in s and "-b:a 192k" in s
+    assert "-c:v h264_nvenc" in s and "-cq 28" in s and "-b:a 192k" in s
     assert a[-1] == "out.mp4"
 
 
